@@ -1,0 +1,16 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Cloudformation Stack for creating Elastic Container Registry (ECR)
+Parameters:
+  RepositoryName:
+    Type: "String"
+    Default: "ecs-spring-boot"
+    Description: ECR - Repository Name
+Resources:
+  ECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+Outputs:
+  ContainerRegistryArn:
+    Description: Container Registry Arn To Push Docker Images
+    Value: !GetAtt ECR.Arn
