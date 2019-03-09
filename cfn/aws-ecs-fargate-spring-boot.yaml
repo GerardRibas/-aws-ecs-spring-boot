@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Cloudformation Stack for ECS Spring Boot Example using Fargate
+Parameters:
+  VPC:
+    Type: "String"
+    Default: "spring-boot-vpc-VPC"
+    Description: "The VPC to Attach This Stack"
+  PublicSubnetAZ1:
+    Type: "String"
+    Default: "spring-boot-vpc-PublicSubnetAZ1"
+    Description: "Public Subnet to deploy the Application Load Balancer"
+  PublicSubnetAZ2:
+    Type: "String"
+    Default: "spring-boot-vpc-PublicSubnetAZ2"
+    Description: "Public Subnet to deploy the Application Load Balancer"
+  PrivateSubnetAZ1:
+    Type: "String"
+    Default: "spring-boot-vpc-PrivateSubnetAZ1"
+    Description: "First Private Subnet where EC2 instance will reside"
+  PrivateSubnetAZ2:
+    Type: "String"
+    Default: "spring-boot-vpc-PrivateSubnetAZ2"
+    Description: "Second Private Subnet where EC2 instance will reside"
+  ALBPort:
+    Type: "Number"
+    Default: 8080
+    Description: "Port"
+  ALBHealthCheckPath:
+    Type: "String"
+    Default: "/hello"
+    Description: "Port"
+  ContainerDefinitionName:
+    Type: "String"
+    Default: "spring-boot-rest-api"
+    Description: "Port"
+  ContainerDefinitionImage:
+    Type: "String"
+    Default: "988135384271.dkr.ecr.us-east-1.amazonaws.com/ecs-spring-boot:latest"
+    Description: "Port"
+  ECSTaskDefinitionCPU:
+    Type: "Number"
+    Default: 256
+  ECSTaskDefinitionMemory:
+    Type: "Number"
+    Default: 512
+  ECSDesiredTasks:
+    Type: "Number"
+    Default: 1
+Resources:
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB'
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Ref PublicSubnetAZ1
+        - Fn::ImportValue: !Ref PublicSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ALB'
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      GroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB-SG'
+      GroupDescription: "Security Group for ALB"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ALB-SG'
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: ALBTargetGroup
+      LoadBalancerArn:
+        Ref: ALB
+      Port: !Ref ALBPort
+      Protocol: HTTP
+  ALBTargetGroup:
+    DependsOn: ALB
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      UnhealthyThresholdCount: 10
+      HealthCheckPath: !Ref ALBHealthCheckPath
+      Name: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB-TG'
+      Port: !Ref ALBPort
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60
+        - Key: slow_start.duration_seconds
+          Value: 60
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ALB-TG'
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'Cluster'
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - FARGATE
+      Family: !Sub ${AWS::StackName}-TD
+      NetworkMode: awsvpc
+      Cpu: !Ref ECSTaskDefinitionCPU
+      Memory: !Ref ECSTaskDefinitionMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        -
+          Name: !Ref ContainerDefinitionName
+          Image: !Ref ContainerDefinitionImage
+          PortMappings:
+            -
+              ContainerPort: !Ref ALBPort
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ECSTaskExecutionRole'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Allow the ECS Tasks to download images from ECR
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                Resource: '*'
+  ECSService:
+    DependsOn: ALBListener
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      DesiredCount: !Ref ECSDesiredTasks
+      LaunchType: FARGATE
+      LoadBalancers:
+        -
+          ContainerName: !Ref ContainerDefinitionName
+          ContainerPort: !Ref ALBPort
+          TargetGroupArn: !Ref ALBTargetGroup
+      ServiceName: !Ref ContainerDefinitionName
+      TaskDefinition: !Ref ECSTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref ECSContainerSecurityGroup
+          Subnets:
+            - Fn::ImportValue: !Ref PrivateSubnetAZ1
+            - Fn::ImportValue: !Ref PrivateSubnetAZ2
+  ECSContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      GroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ECSContainerSecurityGroup'
+      GroupDescription: "Security Group ECS Containers"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 10.0.0.0/16
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ECSContainerSecurityGroup'
+
+Outputs:
+  ApplicationLoadBalancerDns:
+    Description: Container Registry Arn To Push Images
+    Value: !GetAtt ALB.DNSName
