@@ -153,8 +153,13 @@ Resources:
           Name: !Ref ContainerDefinitionName
           Image: !Ref ContainerDefinitionImage
           PortMappings:
-            -
-              ContainerPort: !Ref ALBPort
+            - ContainerPort: !Ref ALBPort
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: !Ref ECSLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: !Ref ContainerDefinitionName
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -180,6 +185,11 @@ Resources:
                   - 'ecr:BatchCheckLayerAvailability'
                   - 'ecr:GetDownloadUrlForLayer'
                   - 'ecr:BatchGetImage'
+                  # Allow the ECS tasks to upload logs to CloudWatch
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogGroups'
                 Resource: '*'
   ECSService:
     DependsOn: ALBListener
@@ -236,6 +246,15 @@ Resources:
             - '-'
             - - !Ref AWS::StackName
               - 'ECSContainerSecurityGroup'
+
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ECS'
+      RetentionInDays: 1
 
   ECSServiceMemoryUtilizationOutAlarm:
     Type: AWS::CloudWatch::Alarm
