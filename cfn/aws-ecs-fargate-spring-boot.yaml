@@ -237,6 +237,118 @@ Resources:
             - - !Ref AWS::StackName
               - 'ECSContainerSecurityGroup'
 
+  ECSServiceMemoryUtilizationOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ECSServiceMemoryUtilizationOutAlarm
+      Namespace: "AWS/ECS"
+      MetricName: "MemoryUtilization"
+      Period: "60"
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: "1"
+      Statistic: Average
+      Threshold: 70
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+      AlarmActions:
+        - !Ref ServiceScalingOutPolicy
+  ECSServiceMemoryUtilizationInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ECSServiceMemoryUtilizationInAlarm
+      Namespace: "AWS/ECS"
+      MetricName: "MemoryUtilization"
+      Period: "300"
+      ComparisonOperator: "LessThanThreshold"
+      EvaluationPeriods: "1"
+      Statistic: Average
+      Threshold: 69
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+      AlarmActions:
+        - !Ref ServiceScalingInPolicy
+
+  AutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [application-autoscaling.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: [
+                  'application-autoscaling:*',
+                  'cloudwatch:DescribeAlarms',
+                  'cloudwatch:PutMetricAlarm',
+                  'ecs:DescribeServices',
+                  'ecs:UpdateService'
+                ]
+                Resource: '*'
+
+  ServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ECSService
+    Properties:
+      MaxCapacity: 20
+      MinCapacity: 1
+      ResourceId: !Join ['', [service/, !Ref 'ECSCluster', /, !GetAtt [ECSService, Name]]]
+      RoleARN: !GetAtt [AutoscalingRole, Arn]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  ServiceScalingOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ServiceScalingOutPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 15
+            ScalingAdjustment: 1
+          - MetricIntervalLowerBound: 15
+            MetricIntervalUpperBound: 25
+            ScalingAdjustment: 2
+          - MetricIntervalLowerBound: 25
+            ScalingAdjustment: 3
+  ServiceScalingInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ServiceScalingInPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        Cooldown: 60
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            MetricIntervalLowerBound: -10
+            ScalingAdjustment: 0
+          - MetricIntervalUpperBound: -10
+            MetricIntervalLowerBound: -20
+            ScalingAdjustment: -2
+          - MetricIntervalUpperBound: -20
+            ScalingAdjustment: -3
 Outputs:
   ApplicationLoadBalancerDns:
     Description: Container Registry Arn To Push Images
