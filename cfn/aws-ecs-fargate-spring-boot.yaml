@@ -16,11 +16,11 @@ Parameters:
   PrivateSubnetAZ1:
     Type: "String"
     Default: "spring-boot-vpc-PrivateSubnetAZ1"
-    Description: "First Private Subnet where EC2 instance will reside"
+    Description: "Private Subnet to deploy container instances"
   PrivateSubnetAZ2:
     Type: "String"
     Default: "spring-boot-vpc-PrivateSubnetAZ2"
-    Description: "Second Private Subnet where EC2 instance will reside"
+    Description: "Private Subnet to deploy container instances"
   ALBPort:
     Type: "Number"
     Default: 8080
@@ -28,11 +28,11 @@ Parameters:
   ALBHealthCheckPath:
     Type: "String"
     Default: "/hello"
-    Description: "Port"
+    Description: "Health Check Path"
   ContainerDefinitionName:
     Type: "String"
     Default: "spring-boot-rest-api"
-    Description: "Port"
+    Description: "Container Definition Name"
   ContainerDefinitionImage:
     Type: "String"
     Default: "988135384271.dkr.ecr.us-east-1.amazonaws.com/ecs-spring-boot:latest"
@@ -40,12 +40,15 @@ Parameters:
   ECSTaskDefinitionCPU:
     Type: "Number"
     Default: 256
+    Description: "CPU Needed for ECS Task"
   ECSTaskDefinitionMemory:
     Type: "Number"
     Default: 512
+    Description: "Memory Needed for ECS Task"
   ECSDesiredTasks:
     Type: "Number"
     Default: 1
+    Description: "Desired tasks to be run for this service"
 Resources:
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
