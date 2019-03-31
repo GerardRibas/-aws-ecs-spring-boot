@@ -1,0 +1,493 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Cloudformation Stack for ECS Spring Boot Example using EC2 Instances
+Parameters:
+  VPC:
+    Type: "String"
+    Default: "spring-boot-vpc-VPC"
+    Description: "The VPC to Attach This Stack"
+  PublicSubnetAZ1:
+    Type: "String"
+    Default: "spring-boot-vpc-PublicSubnetAZ1"
+    Description: "Public Subnet to deploy the Application Load Balancer"
+  PublicSubnetAZ2:
+    Type: "String"
+    Default: "spring-boot-vpc-PublicSubnetAZ2"
+    Description: "Public Subnet to deploy the Application Load Balancer"
+  PrivateSubnetAZ1:
+    Type: "String"
+    Default: "spring-boot-vpc-PrivateSubnetAZ1"
+    Description: "First Private Subnet where EC2 instance will reside"
+  PrivateSubnetAZ2:
+    Type: "String"
+    Default: "spring-boot-vpc-PrivateSubnetAZ2"
+    Description: "Second Private Subnet where EC2 instance will reside"
+  ALBPort:
+    Type: "Number"
+    Default: 8080
+    Description: "Port"
+  ALBHealthCheckPath:
+    Type: "String"
+    Default: "/hello"
+    Description: "Port"
+  ContainerDefinitionName:
+    Type: "String"
+    Default: "spring-boot-rest-api"
+    Description: "Port"
+  ContainerDefinitionImage:
+    Type: "String"
+    Description: "Port"
+  ECSMemoryReservation:
+    Type: "Number"
+    Default: 256
+  ECSDesiredTasks:
+    Type: "Number"
+    Default: 1
+  ContainerInstanceType:
+    Type: "String"
+    Default: "t3.micro"
+  KeyName:
+    Type: "String"
+    Default: "us-key-pair"
+    Description: "Name of an existing EC2 KeyPair to enable SSH in Bastion Host"
+  BastionSecurityGroup:
+    Type: "String"
+    Default: "spring-boot-vpc-BastionSecurityGroup"
+  ECSAutoScalingGroupMinSize:
+    Type: "String"
+    Default: "1"
+  ECSAutoScalingGroupMaxSize:
+    Type: "String"
+    Default: "5"
+Mappings:
+  RegionMap:
+    us-east-1:
+      EcsHvm64: ami-095775a2445cb7ff7
+Resources:
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB'
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Ref PublicSubnetAZ1
+        - Fn::ImportValue: !Ref PublicSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ALB'
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      GroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB-SG'
+      GroupDescription: "Security Group for ALB"
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ALBPort
+          ToPort: !Ref ALBPort
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'ALB-SG'
+  ALBSecurityGroupEgressToEcsHostSecurityGroup:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: "All TCP Egress Traffic From ALB to Container Instances Security Group"
+      GroupId: !Ref ALBSecurityGroup
+      DestinationSecurityGroupId: !Ref ContainerInstancesSecurityGroup
+      FromPort: 0
+      ToPort: 65535
+      IpProtocol: tcp
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: ALBTargetGroup
+      LoadBalancerArn:
+        Ref: ALB
+      Port: !Ref ALBPort
+      Protocol: HTTP
+  ALBTargetGroup:
+    DependsOn: ALB
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      UnhealthyThresholdCount: 10
+      HealthCheckPath: !Ref ALBHealthCheckPath
+      Name: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ALB-TG'
+      Port: !Ref ALBPort
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60
+        - Key: slow_start.duration_seconds
+          Value: 60
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'Cluster'
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities:
+        - EC2
+      Family: !Sub ${AWS::StackName}-TD
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        -
+          Name: !Ref ContainerDefinitionName
+          Image: !Ref ContainerDefinitionImage
+          MemoryReservation: !Ref ECSMemoryReservation
+          PortMappings:
+            -
+              ContainerPort: !Ref ALBPort
+          LogConfiguration:
+            LogDriver: "awslogs"
+            Options:
+              awslogs-group: !Ref ECSLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: !Ref ContainerDefinitionName
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ECSTaskExecutionRole'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Allow the ECS Tasks to download images from ECR
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchCheckLayerAvailability'
+                  - 'ecr:GetDownloadUrlForLayer'
+                  - 'ecr:BatchGetImage'
+                  # Allow the ECS tasks to upload logs to CloudWatch
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogGroups'
+                Resource: '*'
+  ECSService:
+    DependsOn: ALBListener
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      DesiredCount: !Ref ECSDesiredTasks
+      LaunchType: EC2
+      LoadBalancers:
+        - ContainerName: !Ref ContainerDefinitionName
+          ContainerPort: !Ref ALBPort
+          TargetGroupArn: !Ref ALBTargetGroup
+      ServiceName: !Ref ContainerDefinitionName
+      TaskDefinition: !Ref ECSTaskDefinition
+
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'ECS'
+      RetentionInDays: 1
+
+  ContainerInstancesScalingGroup:
+    DependsOn: ECSCluster
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Ref PrivateSubnetAZ1
+        - Fn::ImportValue: !Ref PrivateSubnetAZ2
+      LaunchConfigurationName: !Ref 'ContainerInstances'
+      MinSize: !Ref ECSAutoScalingGroupMinSize
+      MaxSize: !Ref ECSAutoScalingGroupMaxSize
+    UpdatePolicy:
+      AutoScalingReplacingUpdate:
+        WillReplace: 'true'
+  ContainerInstances:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', 'EcsHvm64']
+      SecurityGroups: [!Ref ContainerInstancesSecurityGroup]
+      InstanceType: !Ref ContainerInstanceType
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      KeyName: !Ref KeyName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+          yum update -y
+          yum install -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ECSAutoScalingGroup --region ${AWS::Region}
+
+  ContainerInstancesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Ref VPC
+      GroupName: !Join
+        - '-'
+        - - !Ref AWS::StackName
+          - 'EcsHost-SG'
+      GroupDescription: "Security Group for EcsHosts"
+      SecurityGroupIngress:
+        - Description: 'Bla'
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Ref BastionSecurityGroup
+          IpProtocol: 6
+          FromPort: 22
+          ToPort: 22
+      Tags:
+        - Key: Name
+          Value: !Join
+            - '-'
+            - - !Ref AWS::StackName
+              - 'EcsHost-SG'
+  ContainerInstancesSecurityGroupIngressFromALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: 'Bla'
+      GroupId: !Ref ContainerInstancesSecurityGroup
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ec2.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ecs:CreateCluster'
+                  - 'ecs:DeregisterContainerInstance'
+                  - 'ecs:DiscoverPollEndpoint'
+                  - 'ecs:Poll'
+                  - 'ecs:RegisterContainerInstance'
+                  - 'ecs:StartTelemetrySession'
+                  - 'ecs:Submit*'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'ecr:GetAuthorizationToken'
+                  - 'ecr:BatchGetImage'
+                  - 'ecr:GetDownloadUrlForLayer'
+                Resource: '*'
+
+  ECSServiceMemoryUtilizationOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ECSServiceMemoryUtilizationOutAlarm
+      Namespace: "AWS/ECS"
+      MetricName: "MemoryUtilization"
+      Period: "60"
+      ComparisonOperator: "GreaterThanOrEqualToThreshold"
+      EvaluationPeriods: "1"
+      Statistic: Average
+      Threshold: 70
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+      AlarmActions:
+        - !Ref ServiceScalingOutPolicy
+  ECSServiceMemoryUtilizationInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ECSServiceMemoryUtilizationInAlarm
+      Namespace: "AWS/ECS"
+      MetricName: "MemoryUtilization"
+      Period: "300"
+      ComparisonOperator: "LessThanThreshold"
+      EvaluationPeriods: "1"
+      Statistic: Average
+      Threshold: 69
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+      AlarmActions:
+        - !Ref ServiceScalingInPolicy
+
+  ServiceAutoscalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [application-autoscaling.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: [
+                  'application-autoscaling:*',
+                  'cloudwatch:DescribeAlarms',
+                  'cloudwatch:PutMetricAlarm',
+                  'ecs:DescribeServices',
+                  'ecs:UpdateService'
+                ]
+                Resource: '*'
+  ServiceScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ECSService
+    Properties:
+      MaxCapacity: 20
+      MinCapacity: 1
+      ResourceId: !Join ['', [service/, !Ref 'ECSCluster', /, !GetAtt [ECSService, Name]]]
+      RoleARN: !GetAtt [ServiceAutoscalingRole, Arn]
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  ServiceScalingOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ServiceScalingOutPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 15
+            ScalingAdjustment: 1
+          - MetricIntervalLowerBound: 15
+            MetricIntervalUpperBound: 25
+            ScalingAdjustment: 2
+          - MetricIntervalLowerBound: 25
+            ScalingAdjustment: 3
+  ServiceScalingInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ServiceScalingInPolicy
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalingTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        Cooldown: 60
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            MetricIntervalLowerBound: -10
+            ScalingAdjustment: 0
+          - MetricIntervalUpperBound: -10
+            MetricIntervalLowerBound: -20
+            ScalingAdjustment: -2
+          - MetricIntervalUpperBound: -20
+            ScalingAdjustment: -3
+
+  ECSClusterMemoryReservationAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '70'
+      AlarmDescription: Alarm if Cluster Memory Reservation is to high
+      Period: '60'
+      AlarmActions:
+        - Ref: ContainerInstanceScaleUpPolicy
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: MemoryReservation
+  ECSClusterMemoryReservationAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '2'
+      Statistic: Average
+      Threshold: '30'
+      AlarmDescription: Alarm if Cluster Memory Reservation is to Low
+      Period: '60'
+      AlarmActions:
+        - Ref: ContainerInstanceScaleDownPolicy
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ECSCluster
+      ComparisonOperator: LessThanThreshold
+      MetricName: MemoryReservation
+  ContainerInstanceScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ContainerInstancesScalingGroup
+      Cooldown: '1'
+      ScalingAdjustment: '1'
+  ContainerInstanceScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ContainerInstancesScalingGroup
+      Cooldown: '1'
+      ScalingAdjustment: '-1'
+
+Outputs:
+  ApplicationLoadBalancerDns:
+    Description: Container Registry Arn To Push Images
+    Value: !GetAtt ALB.DNSName
